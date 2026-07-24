@@ -7,9 +7,9 @@ from zoneinfo import ZoneInfo
 import matplotlib.pyplot as plt
 
 # --- CONFIGURAZIONE PRINCIPALE ---
-OSC_IP = '192.168.1.100'  # Sostituisci con l'IP reale
+OSC_IP = '169.254.235.175'  # Sostituisci con l'IP reale
 INTERVAL_S = 0.5          
-TOTAL_TIME_S = 3600       
+TOTAL_TIME_S = 1800       
 
 def setup_oscilloscope(inst):
     settings_applied = []
