@@ -1,0 +1,35 @@
+# Ignore acquisitions folder.
+
+acquisitions/
+
+# Ignore all output files, wherever they are.
+
+*.csv
+*_plot.png
+*_plot.svg
+*_setup.txt
+
+# Ignore caches and virtual environments.
+
+__pycache__/
+*.py[cod]
+*$py.class
+
+.venv/
+venv/
+env/
+
+# Ignore local VS Code configuration files.
+
+.vscode/
+
+# Ignore MacOS hidden folder files.
+
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Ignore Linux or Windows hidden folder files.
+
+*~
+Thumbs.db
