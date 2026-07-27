@@ -1,5 +1,6 @@
 import os
 # FORZA il backend grafico a livello di sistema operativo PRIMA di tutto!
+# Questo risolve definitivamente l'errore "headless" nei container.
 os.environ['MPLBACKEND'] = 'TkAgg'
 
 import csv
@@ -10,10 +11,13 @@ import pyvisa
 import matplotlib.pyplot as plt
 
 # --- CONFIGURAZIONE PRINCIPALE ---
-OSC_IP = '169.254.235.175'
-INTERVAL_S = 0.5         # Intervallo tra i punti (s)
+OSC_IP = '169.254.235.175'  # Sostituisci con l'IP reale del tuo Siglent
+INTERVAL_S = 0.5            # 10 campionamenti al sec (evita il blocco dell'oscilloscopio)
 TOTAL_TIME_S = 180          # Durata totale dell'acquisizione (s)
 
+# Parametri per l'Envelope Detection (Visibilità)
+WINDOW_SIZE = 150           # Dimensione della finestra (ca. 15 secondi a 0.1s di intervallo)
+STEP = 30                   # Avanzamento della finestra
 
 def setup_oscilloscope(inst):
     settings_applied = []
@@ -22,8 +26,8 @@ def setup_oscilloscope(inst):
         inst.write(cmd)
         settings_applied.append(f"{desc}: {cmd}")
 
-    # Trigger AUTO per un campionamento continuo
-    apply_cmd("Trigger Mode", "TRIGger:MODE AUTO")
+    # Comando specifico Siglent per evitare blocchi
+    apply_cmd("Trigger Mode", "TRMD AUTO")
     return settings_applied
 
 
@@ -65,9 +69,7 @@ def main():
     with open(file_setup, 'w', encoding='utf-8') as fs:
         fs.write("--- SETUP ESPERIMENTO MACH-ZEHNDER ---\n")
         fs.write(f"Strumento: {idn.strip()}\n")
-        fs.write(
-            f"Inizio Acquisizione (Roma): {ora_corrente.strftime('%Y-%m-%d %H:%M:%S')}\n"
-        )
+        fs.write(f"Inizio Acquisizione (Roma): {ora_corrente.strftime('%Y-%m-%d %H:%M:%S')}\n")
         fs.write(f"Durata Totale Impostata: {TOTAL_TIME_S} secondi\n")
         fs.write(f"Intervallo di campionamento loop: {INTERVAL_S} secondi\n")
         fs.write("\n--- COMANDI SCPI INVIATI AL SETUP ---\n")
@@ -77,14 +79,7 @@ def main():
     # --- 4. PREPARAZIONE FILE CSV DATI ---
     f_csv = open(file_dati, mode='w', newline='')
     writer = csv.writer(f_csv)
-    header = [
-        'Timestamp',
-        'Time_s',
-        'Mean_CH1_V',
-        'StdDev_CH1_V',
-        'Mean_CH2_V',
-        'StdDev_CH2_V',
-    ]
+    header = ['Timestamp', 'Time_s', 'Mean_CH1_V', 'StdDev_CH1_V', 'Mean_CH2_V', 'StdDev_CH2_V']
     writer.writerow(header)
 
     # --- 5. SETUP PLOT IN TEMPO REALE ---
@@ -128,16 +123,14 @@ def main():
 
                 ts_now = datetime.now(tz_roma).strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
 
-                writer.writerow(
-                    [ts_now, round(elapsed, 3), v1_mean, v1_std, v2_mean, v2_std]
-                )
+                writer.writerow([ts_now, round(elapsed, 3), v1_mean, v1_std, v2_mean, v2_std])
                 f_csv.flush()
 
                 times.append(elapsed)
                 v1_list.append(v1_mean)
                 v2_list.append(v2_mean)
 
-                # Finestra mobile a scorrimento (1000 punti)
+                # Finestra mobile a scorrimento (live visivo)
                 if len(times) > 1000:
                     times.pop(0)
                     v1_list.pop(0)
@@ -155,13 +148,12 @@ def main():
                 plt.pause(0.01)  # Aggiorna la UI
 
                 tempo_rimasto = TOTAL_TIME_S - elapsed
-                print(
-                    f"[{ts_now}] CH1: {v1_mean:.3f}V | CH2: {v2_mean:.3f}V | Rimasti: {tempo_rimasto:.0f}s"
-                )
+                print(f"[{ts_now}] CH1: {v1_mean:.3f}V | CH2: {v2_mean:.3f}V | Rimasti: {tempo_rimasto:.0f}s")
 
             except Exception as parse_err:
                 print(f"Errore parsing: {parse_err}")
 
+            # Attesa per rispettare il sample rate (evita SCPI flooding)
             time_to_wait = INTERVAL_S - (time.time() - current_time)
             if time_to_wait > 0:
                 time.sleep(time_to_wait)
@@ -177,8 +169,8 @@ def main():
         plt.ioff()
         plt.close(fig_rt)
 
-        # --- GENERAZIONE GRAFICO PANORAMICO DAL CSV E CALCOLO VISIBILITÀ ---
-        print("Lettura file CSV per generare l'immagine e calcolare la visibilità...")
+        # --- GENERAZIONE GRAFICO E CALCOLO VISIBILITÀ (ENVELOPE DETECTION) ---
+        print("Calcolo Envelope Detection (Visibilità nel tempo)...")
         full_times, full_v1, full_v2 = [], [], []
 
         with open(file_dati, mode='r') as f:
@@ -188,51 +180,66 @@ def main():
                 full_v1.append(float(row['Mean_CH1_V']))
                 full_v2.append(float(row['Mean_CH2_V']))
 
-        # --- CALCOLO DELLA VISIBILITÀ DELLE FRANGE ---
-        if full_v1 and full_v2:
-            v1_max, v1_min = max(full_v1), min(full_v1)
-            v2_max, v2_min = max(full_v2), min(full_v2)
+        vis_times, vis_ch1_list, vis_ch2_list = [], [], []
 
-            # Evita divisioni per zero nel caso ipotetico in cui Vmax + Vmin == 0
-            vis_ch1 = (v1_max - v1_min) / (v1_max + v1_min) if (v1_max + v1_min) != 0 else 0.0
-            vis_ch2 = (v2_max - v2_min) / (v2_max + v2_min) if (v2_max + v2_min) != 0 else 0.0
+        if len(full_times) > WINDOW_SIZE:
+            for i in range(0, len(full_times) - WINDOW_SIZE, STEP):
+                v1_chunk = full_v1[i : i + WINDOW_SIZE]
+                v2_chunk = full_v2[i : i + WINDOW_SIZE]
+                t_chunk  = full_times[i : i + WINDOW_SIZE]
 
-            # Stampa chiara a terminale
-            print("\n" + "="*55)
-            print("📊 RISULTATI VISIBILITÀ FRANGE (CONTRASTO)")
-            print(f"CH1: Visibilità = {vis_ch1:.4f}  (V_max = {v1_max:.4f} V, V_min = {v1_min:.4f} V)")
-            print(f"CH2: Visibilità = {vis_ch2:.4f}  (V_max = {v2_max:.4f} V, V_min = {v2_min:.4f} V)")
-            print("="*55 + "\n")
+                v1_max, v1_min = max(v1_chunk), min(v1_chunk)
+                v2_max, v2_min = max(v2_chunk), min(v2_chunk)
 
-            # Scrittura dei risultati nel file di setup (in modalità append 'a')
+                vis1 = (v1_max - v1_min) / (v1_max + v1_min) if (v1_max + v1_min) != 0 else 0.0
+                vis2 = (v2_max - v2_min) / (v2_max + v2_min) if (v2_max + v2_min) != 0 else 0.0
+
+                vis_ch1_list.append(vis1)
+                vis_ch2_list.append(vis2)
+                vis_times.append(t_chunk[int(WINDOW_SIZE/2)])
+
+            # Scrittura dei risultati di visibilità nel setup
             with open(file_setup, 'a', encoding='utf-8') as fs:
-                fs.write("\n--- RISULTATI VISIBILITÀ FRANGE ---\n")
-                fs.write(f"CH1 Visibilità: {vis_ch1:.4f} (Vmax = {v1_max:.4f} V, Vmin = {v1_min:.4f} V)\n")
-                fs.write(f"CH2 Visibilità: {vis_ch2:.4f} (Vmax = {v2_max:.4f} V, Vmin = {v2_min:.4f} V)\n")
+                fs.write("\n--- ANALISI VISIBILITÀ (ENVELOPE DETECTION) ---\n")
+                fs.write(f"Visibilità iniziale CH1: {vis_ch1_list[0]:.4f}\n")
+                fs.write(f"Visibilità finale CH1: {vis_ch1_list[-1]:.4f}\n")
+                fs.write(f"Visibilità iniziale CH2: {vis_ch2_list[0]:.4f}\n")
+                fs.write(f"Visibilità finale CH2: {vis_ch2_list[-1]:.4f}\n")
 
-        # Plot finale
-        fig_final, (ax1_f, ax2_f) = plt.subplots(2, 1, sharex=True, figsize=(12, 8))
+            print(f"\n📊 Visibilità CH1 passata da {vis_ch1_list[0]:.3f} a {vis_ch1_list[-1]:.3f}")
 
+        # --- PLOT FINALE A 3 PANNELLI ---
+        fig_final, (ax1_f, ax2_f, ax3_f) = plt.subplots(3, 1, sharex=True, figsize=(12, 10))
+
+        # Plot Segnali
         ax1_f.plot(full_times, full_v1, 'b-', label="CH1 Mean (V)", linewidth=1.5)
         ax2_f.plot(full_times, full_v2, 'r-', label="CH2 Mean (V)", linewidth=1.5)
 
+        # Plot Visibilità
+        if vis_times:
+            ax3_f.plot(vis_times, vis_ch1_list, 'k.-', label="Visibilità CH1", linewidth=1.5)
+            ax3_f.plot(vis_times, vis_ch2_list, 'g.-', label="Visibilità CH2", linewidth=1.5)
+            ax3_f.set_ylabel('Contrasto (0 - 1)')
+            ax3_f.set_ylim(0, 1)
+            ax3_f.legend()
+            ax3_f.grid(True, linestyle='--', alpha=0.6)
+
         ax1_f.set_ylabel('Tensione CH1 (V)')
         ax2_f.set_ylabel('Tensione CH2 (V)')
-        ax2_f.set_xlabel('Tempo (s)')
-        ax1_f.set_title(
-            f'Deriva Fasi Mach-Zehnder - Acquisizione Completa: {nome_base}'
-        )
+        ax3_f.set_xlabel('Tempo (s)')
+
+        ax1_f.set_title(f'Deriva Fasi Mach-Zehnder - Acquisizione Completa: {nome_base}')
         ax1_f.legend()
         ax2_f.legend()
 
         ax1_f.grid(True, linestyle='--', alpha=0.6)
         ax2_f.grid(True, linestyle='--', alpha=0.6)
 
+        plt.tight_layout()
         plt.savefig(file_grafico, dpi=300, bbox_inches='tight')
-        print(f"✅ Grafico finale salvato in: {file_grafico}")
+        print(f"✅ Grafico finale con Visibilità salvato in: {file_grafico}")
 
         plt.show()
-
 
 if __name__ == '__main__':
     main()
