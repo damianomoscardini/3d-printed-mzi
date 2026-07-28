@@ -13,7 +13,7 @@ import matplotlib.pyplot as plt
 # --- CONFIGURAZIONE PRINCIPALE ---
 OSC_IP = '169.254.235.175'  # Sostituisci con l'IP reale del tuo Siglent
 INTERVAL_S = 0.5            # 10 campionamenti al sec (evita il blocco dell'oscilloscopio)
-TOTAL_TIME_S = 180          # Durata totale dell'acquisizione (s)
+TOTAL_TIME_S = 3600          # Durata totale dell'acquisizione (s)
 
 # Parametri per l'Envelope Detection (Visibilità)
 WINDOW_SIZE = 150           # Dimensione della finestra (ca. 15 secondi a 0.1s di intervallo)
