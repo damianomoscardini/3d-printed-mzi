@@ -1,6 +1,4 @@
 import os
-# FORZA il backend grafico a livello di sistema operativo PRIMA di tutto!
-# Questo risolve definitivamente l'errore "headless" nei container.
 os.environ['MPLBACKEND'] = 'TkAgg'
 
 import csv
@@ -11,40 +9,37 @@ import pyvisa
 import matplotlib.pyplot as plt
 
 # --- CONFIGURAZIONE PRINCIPALE ---
-OSC_IP = '169.254.235.175'  # Sostituisci con l'IP reale del tuo Siglent
-INTERVAL_S = 0.5            # 10 campionamenti al sec (evita il blocco dell'oscilloscopio)
-TOTAL_TIME_S = 3600          # Durata totale dell'acquisizione (s)
+OSC_IP = '169.254.235.175'  
+INTERVAL_S = 0.5            
+TOTAL_TIME_S = 3600         
 
 # Parametri per l'Envelope Detection (Visibilità)
-WINDOW_SIZE = 150           # Dimensione della finestra (ca. 15 secondi a 0.1s di intervallo)
-STEP = 30                   # Avanzamento della finestra
+WINDOW_SIZE = 150           
+STEP = 30                   
 
 def setup_oscilloscope(inst):
     settings_applied = []
-
     def apply_cmd(desc, cmd):
         inst.write(cmd)
         settings_applied.append(f"{desc}: {cmd}")
-
-    # Comando specifico Siglent per evitare blocchi
     apply_cmd("Trigger Mode", "TRMD AUTO")
     return settings_applied
 
-
 def main():
     # --- 1. GESTIONE TIMEZONE E NOMI CARTELLE ---
+    ACQ_MODE = "continuous"
+    
     tz_roma = ZoneInfo("Europe/Rome")
     ora_corrente = datetime.now(tz_roma)
 
-    data_str = ora_corrente.strftime('%Y%m%d')  # es. 20260727
-    ora_str = ora_corrente.strftime('%H%M')     # es. 1105
-    nome_base = f"{data_str}_{ora_str}"         # es. 20260727_1105
+    data_str = ora_corrente.strftime('%Y%m%d')  
+    ora_str = ora_corrente.strftime('%H%M')     
+    nome_base = f"{data_str}_{ora_str}_{ACQ_MODE}"
 
-    # Creazione sotto-cartella specifica: acquisitions/20260727/20260727_1105
-    cartella_acquisizione = os.path.join("acquisitions", data_str, nome_base)
+    # Albero: acquisitions / continuous / YYYYMMDD / YYYYMMDD_HHMM_continuous
+    cartella_acquisizione = os.path.join("acquisitions", ACQ_MODE, data_str, nome_base)
     os.makedirs(cartella_acquisizione, exist_ok=True)
 
-    # I 3 file dell'esperimento vengono salvati NELLA sotto-cartella
     file_dati = os.path.join(cartella_acquisizione, f"{nome_base}.csv")
     file_setup = os.path.join(cartella_acquisizione, f"{nome_base}_setup.txt")
     file_grafico = os.path.join(cartella_acquisizione, f"{nome_base}_plot.png")
@@ -67,9 +62,9 @@ def main():
 
     # --- 3. CREAZIONE FILE DI SETUP INIZIALE ---
     with open(file_setup, 'w', encoding='utf-8') as fs:
-        fs.write("--- SETUP ESPERIMENTO MACH-ZEHNDER ---\n")
+        fs.write("--- SETUP ESPERIMENTO MACH-ZEHNDER (CONTINUOUS POLLING) ---\n")
         fs.write(f"Strumento: {idn.strip()}\n")
-        fs.write(f"Inizio Acquisizione (Roma): {ora_corrente.strftime('%Y-%m-%d %H:%M:%S')}\n")
+        fs.write(f"Inizio Acquisizione: {ora_corrente.strftime('%Y-%m-%d %H:%M:%S')}\n")
         fs.write(f"Durata Totale Impostata: {TOTAL_TIME_S} secondi\n")
         fs.write(f"Intervallo di campionamento loop: {INTERVAL_S} secondi\n")
         fs.write("\n--- COMANDI SCPI INVIATI AL SETUP ---\n")
@@ -83,7 +78,7 @@ def main():
     writer.writerow(header)
 
     # --- 5. SETUP PLOT IN TEMPO REALE ---
-    plt.ion()  # Modalità interattiva
+    plt.ion()  
     fig_rt, (ax1_rt, ax2_rt) = plt.subplots(2, 1, sharex=True, figsize=(10, 8))
 
     line1, = ax1_rt.plot([], [], 'b-', label="CH1 Mean (V)")
@@ -92,7 +87,7 @@ def main():
     ax1_rt.set_ylabel('Tensione CH1 (V)')
     ax2_rt.set_ylabel('Tensione CH2 (V)')
     ax2_rt.set_xlabel('Tempo (s)')
-    ax1_rt.set_title(f'Monitoraggio in Diretta - Acq: {nome_base}')
+    ax1_rt.set_title(f'Monitoraggio Deriva Lenta - Acq: {nome_base}')
     ax1_rt.legend()
     ax2_rt.legend()
 
@@ -109,7 +104,6 @@ def main():
             if elapsed > TOTAL_TIME_S:
                 break
 
-            # Lettura parametri dall'oscilloscopio
             raw_ch1_mean = inst.query("C1:PAVA? MEAN")
             raw_ch1_std  = inst.query("C1:PAVA? STDEV")
             raw_ch2_mean = inst.query("C2:PAVA? MEAN")
@@ -130,7 +124,6 @@ def main():
                 v1_list.append(v1_mean)
                 v2_list.append(v2_mean)
 
-                # Finestra mobile a scorrimento (live visivo)
                 if len(times) > 1000:
                     times.pop(0)
                     v1_list.pop(0)
@@ -145,7 +138,7 @@ def main():
                 ax1_rt.autoscale_view()
                 ax2_rt.relim()
                 ax2_rt.autoscale_view()
-                plt.pause(0.01)  # Aggiorna la UI
+                plt.pause(0.01)  
 
                 tempo_rimasto = TOTAL_TIME_S - elapsed
                 print(f"[{ts_now}] CH1: {v1_mean:.3f}V | CH2: {v2_mean:.3f}V | Rimasti: {tempo_rimasto:.0f}s")
@@ -153,7 +146,6 @@ def main():
             except Exception as parse_err:
                 print(f"Errore parsing: {parse_err}")
 
-            # Attesa per rispettare il sample rate (evita SCPI flooding)
             time_to_wait = INTERVAL_S - (time.time() - current_time)
             if time_to_wait > 0:
                 time.sleep(time_to_wait)
@@ -198,7 +190,6 @@ def main():
                 vis_ch2_list.append(vis2)
                 vis_times.append(t_chunk[int(WINDOW_SIZE/2)])
 
-            # Scrittura dei risultati di visibilità nel setup
             with open(file_setup, 'a', encoding='utf-8') as fs:
                 fs.write("\n--- ANALISI VISIBILITÀ (ENVELOPE DETECTION) ---\n")
                 fs.write(f"Visibilità iniziale CH1: {vis_ch1_list[0]:.4f}\n")
@@ -211,11 +202,9 @@ def main():
         # --- PLOT FINALE A 3 PANNELLI ---
         fig_final, (ax1_f, ax2_f, ax3_f) = plt.subplots(3, 1, sharex=True, figsize=(12, 10))
 
-        # Plot Segnali
         ax1_f.plot(full_times, full_v1, 'b-', label="CH1 Mean (V)", linewidth=1.5)
         ax2_f.plot(full_times, full_v2, 'r-', label="CH2 Mean (V)", linewidth=1.5)
 
-        # Plot Visibilità
         if vis_times:
             ax3_f.plot(vis_times, vis_ch1_list, 'k.-', label="Visibilità CH1", linewidth=1.5)
             ax3_f.plot(vis_times, vis_ch2_list, 'g.-', label="Visibilità CH2", linewidth=1.5)
@@ -228,7 +217,7 @@ def main():
         ax2_f.set_ylabel('Tensione CH2 (V)')
         ax3_f.set_xlabel('Tempo (s)')
 
-        ax1_f.set_title(f'Deriva Fasi Mach-Zehnder - Acquisizione Completa: {nome_base}')
+        ax1_f.set_title(f'Deriva Fasi Mach-Zehnder - Acquisizione: {nome_base}')
         ax1_f.legend()
         ax2_f.legend()
 

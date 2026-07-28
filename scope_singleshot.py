@@ -12,12 +12,10 @@ import matplotlib.pyplot as plt
 
 # --- CONFIGURAZIONE PRINCIPALE ---
 OSC_IP = '169.254.235.175'
-TOTAL_TIME_S = 180          # Tempo totale desiderato dell'evento (s)
+TOTAL_TIME_S = 0.5            # Tempo totale desiderato dell'evento (s)
 TARGET_CSV_POINTS = 20000     # Numero massimo di righe desiderate nel CSV finale
 
 # Costante per Siglent Serie 800X HD (12-bit)
-# I convertitori 12-bit mappano il voltaggio con altissima risoluzione.
-# Se i Volt sul grafico risultano sballati di un fattore ~8, cambia in 409.6
 ADC_CODE_PER_DIV = 3200.0 
 
 def get_closest_tdiv(target_total_time):
@@ -36,14 +34,17 @@ def get_closest_tdiv(target_total_time):
 
 def main():
     # --- 1. GESTIONE TIMEZONE E NOMI CARTELLE ---
+    ACQ_MODE = "singleshot"
+    
     tz_roma = ZoneInfo("Europe/Rome")
     ora_corrente = datetime.now(tz_roma)
 
     data_str = ora_corrente.strftime('%Y%m%d')
     ora_str = ora_corrente.strftime('%H%M')
-    nome_base = f"{data_str}_{ora_str}_FAST"
+    nome_base = f"{data_str}_{ora_str}_{ACQ_MODE}"
 
-    cartella_acquisizione = os.path.join("acquisitions", data_str, nome_base)
+    # Albero: acquisitions / singleshot / YYYYMMDD / YYYYMMDD_HHMM_singleshot
+    cartella_acquisizione = os.path.join("acquisitions", ACQ_MODE, data_str, nome_base)
     os.makedirs(cartella_acquisizione, exist_ok=True)
 
     file_dati = os.path.join(cartella_acquisizione, f"{nome_base}.csv")
@@ -57,7 +58,6 @@ def main():
     print(f"Connessione a {resource_string}...")
     try:
         inst = rm.open_resource(resource_string)
-        # Timeout a 20 secondi per consentire il download di 50 Megapunti
         inst.timeout = 20000 
     except Exception as e:
         print(f"Errore di connessione PyVISA: {e}")
@@ -77,14 +77,12 @@ def main():
         settings_applied.append(cmd)
 
     apply_cmd(f"TDIV {best_tdiv}S") 
-    # Sfruttiamo i 50 Megapunti massimi del SDS824X HD
     apply_cmd("MSIZ 50M") 
-    # Entra in modalità Trigger Singolo
     apply_cmd("TRMD SINGLE")
     
     # --- 4. CREAZIONE FILE DI SETUP (PARTE INIZIALE) ---
     with open(file_setup, 'w', encoding='utf-8') as fs:
-        fs.write("--- SETUP ESPERIMENTO MACH-ZEHNDER (TRANSIENTE VELOCE) ---\n")
+        fs.write("--- SETUP ESPERIMENTO MACH-ZEHNDER (SINGLESHOT VELOCE) ---\n")
         fs.write(f"Strumento: {idn.strip()}\n")
         fs.write(f"Inizio Sessione: {ora_corrente.strftime('%Y-%m-%d %H:%M:%S')}\n")
         fs.write(f"Modalità Acquisizione: BULK BINARY DOWNLOAD (12-bit)\n")
@@ -94,17 +92,30 @@ def main():
         for imp in settings_applied:
             fs.write(f"- {imp}\n")
 
-    # --- 5. ATTESA DEL TRIGGER ---
-    print("\n[⏳] Oscilloscopio ARMATO in SINGLE Trigger. In attesa dell'evento...")
+    # --- 5. ATTESA DEL TRIGGER (Intelligente) ---
+    print("\n[⏳] Oscilloscopio ARMATO in SINGLE. In attesa dell'evento...")
     print("Fai avvenire la variazione (Premi Ctrl+C per annullare se non scatta).")
+    
+    trigger_hit = False
     
     try:
         while True:
             status = inst.query("SAST?").strip()
+            
+            # Se l'acquisizione è lunga, diamo il feedback "Trig'd"
+            if TOTAL_TIME_S >= 0.5 and not trigger_hit and ("Trig" in status or "Run" in status):
+                print("[⚡] TRIGGER RILEVATO! Sto acquisendo i dati...")
+                trigger_hit = True
+                
+            # Se è brevissima, o se ha finito, aspetta solo lo Stop
             if "Stop" in status:
-                print("[!] EVENTO CATTURATO! L'oscilloscopio si è fermato.")
+                if TOTAL_TIME_S < 0.5:
+                    print("[⚡] EVENTO FLASH CATTURATO! L'oscilloscopio si è fermato.")
+                else:
+                    print("[!] ACQUISIZIONE COMPLETATA! L'oscilloscopio è fermo.")
                 break
-            time.sleep(0.1)
+                
+            time.sleep(0.05)
             
     except KeyboardInterrupt:
         print("\nAcquisizione annullata. Ripristino oscilloscopio in AUTO...")
@@ -193,7 +204,7 @@ def main():
     
     plt.xlabel('Tempo (s)')
     plt.ylabel('Tensione CH1 (V)')
-    plt.title(f'Acquisizione Transiente (High-Speed Bulk) - {nome_base}')
+    plt.title(f'Acquisizione Transiente (High-Speed) - {nome_base}')
     plt.legend()
     plt.grid(True, linestyle='--', alpha=0.6)
     
