@@ -8,114 +8,147 @@ from zoneinfo import ZoneInfo
 import pyvisa
 import matplotlib.pyplot as plt
 
-# --- CONFIGURAZIONE PRINCIPALE ---
+# --- MAIN CONFIGURATION ---
 OSC_IP = '169.254.235.175'  
-INTERVAL_S = 0.5            
-TOTAL_TIME_S = 3600         
+INTERVAL_S = 0.5            # Loop sampling interval (seconds)
+TOTAL_TIME_S = 120          # Total duration of the experiment (seconds)
 
-# Parametri per l'Envelope Detection (Visibilità)
+# Parameters for Envelope Detection (Visibility)
 WINDOW_SIZE = 150           
 STEP = 30                   
 
-def setup_oscilloscope(inst):
+def get_closest_tdiv(target_total_time):
+    """Calculates the closest Time/Div step (1-2-5) for a 10-division grid."""
+    target_tdiv = target_total_time / 10.0  
+    
+    multipliers = [1.0, 2.0, 5.0]
+    decades = [1e-9, 1e-8, 1e-7, 1e-6, 1e-5, 1e-4, 1e-3, 1e-2, 1e-1, 1.0, 10.0, 100.0]
+    
+    valid_tdivs = [m * d for d in decades for m in multipliers]
+    
+    for tdiv in valid_tdivs:
+        if tdiv >= target_tdiv:
+            return tdiv
+    return valid_tdivs[-1]
+
+def setup_oscilloscope(inst, interval_s):
     settings_applied = []
+    
+    # Disable command headers to make parsing raw values easier
+    inst.write("CHDR OFF")
+    
     def apply_cmd(desc, cmd):
         inst.write(cmd)
         settings_applied.append(f"{desc}: {cmd}")
+        
     apply_cmd("Trigger Mode", "TRMD AUTO")
-    return settings_applied
+    
+    # Dynamically set Time/Div based on INTERVAL_S to fill the screen
+    best_tdiv = get_closest_tdiv(interval_s)
+    apply_cmd("Time/Div", f"TDIV {best_tdiv}S")
+    
+    return settings_applied, best_tdiv
 
 def main():
-    # --- 1. GESTIONE TIMEZONE E NOMI CARTELLE ---
+    # --- 1. TIMEZONE & DIRECTORY MANAGEMENT ---
     ACQ_MODE = "continuous"
     
-    tz_roma = ZoneInfo("Europe/Rome")
-    ora_corrente = datetime.now(tz_roma)
+    tz_rome = ZoneInfo("Europe/Rome")
+    current_time = datetime.now(tz_rome)
 
-    data_str = ora_corrente.strftime('%Y%m%d')  
-    ora_str = ora_corrente.strftime('%H%M')     
-    nome_base = f"{data_str}_{ora_str}_{ACQ_MODE}"
+    date_str = current_time.strftime('%Y%m%d')  
+    time_str = current_time.strftime('%H%M')     
+    base_name = f"{date_str}_{time_str}_{ACQ_MODE}"
 
-    # Albero: acquisitions / continuous / YYYYMMDD / YYYYMMDD_HHMM_continuous
-    cartella_acquisizione = os.path.join("acquisitions", ACQ_MODE, data_str, nome_base)
-    os.makedirs(cartella_acquisizione, exist_ok=True)
+    # Folder Tree: acquisitions / continuous / YYYYMMDD / YYYYMMDD_HHMM_continuous
+    acq_folder = os.path.join("acquisitions", ACQ_MODE, date_str, base_name)
+    os.makedirs(acq_folder, exist_ok=True)
 
-    file_dati = os.path.join(cartella_acquisizione, f"{nome_base}.csv")
-    file_setup = os.path.join(cartella_acquisizione, f"{nome_base}_setup.txt")
-    file_grafico = os.path.join(cartella_acquisizione, f"{nome_base}_plot.png")
+    file_data = os.path.join(acq_folder, f"{base_name}.csv")
+    file_setup = os.path.join(acq_folder, f"{base_name}_setup.txt")
+    file_plot = os.path.join(acq_folder, f"{base_name}_plot.png")
 
-    # --- 2. CONNESSIONE PYVISA ---
+    # --- 2. PYVISA CONNECTION ---
     rm = pyvisa.ResourceManager('@py')
     resource_string = f"TCPIP0::{OSC_IP}::inst0::INSTR"
 
-    print(f"Connessione a {resource_string}...")
+    print(f"Connecting to {resource_string}...")
     try:
         inst = rm.open_resource(resource_string)
         inst.timeout = 2000
     except Exception as e:
-        print(f"Errore di connessione PyVISA: {e}")
+        print(f"PyVISA connection error: {e}")
         return
 
     idn = inst.query("*IDN?")
-    print(f"Connesso a: {idn.strip()}")
-    impostazioni = setup_oscilloscope(inst)
+    print(f"Connected to: {idn.strip()}")
+    settings, applied_tdiv = setup_oscilloscope(inst, INTERVAL_S)
+    
+    print(f"Time/Div dynamically set to: {applied_tdiv} s/div to match a {INTERVAL_S}s polling interval.")
 
-    # --- 3. CREAZIONE FILE DI SETUP INIZIALE ---
+    # --- 3. CREATE INITIAL SETUP FILE ---
     with open(file_setup, 'w', encoding='utf-8') as fs:
-        fs.write("--- SETUP ESPERIMENTO MACH-ZEHNDER (CONTINUOUS POLLING) ---\n")
-        fs.write(f"Strumento: {idn.strip()}\n")
-        fs.write(f"Inizio Acquisizione: {ora_corrente.strftime('%Y-%m-%d %H:%M:%S')}\n")
-        fs.write(f"Durata Totale Impostata: {TOTAL_TIME_S} secondi\n")
-        fs.write(f"Intervallo di campionamento loop: {INTERVAL_S} secondi\n")
-        fs.write("\n--- COMANDI SCPI INVIATI AL SETUP ---\n")
-        for imp in impostazioni:
-            fs.write(f"- {imp}\n")
+        fs.write("--- MACH-ZEHNDER EXPERIMENT SETUP (CONTINUOUS POLLING) ---\n")
+        fs.write(f"Instrument: {idn.strip()}\n")
+        fs.write(f"Acquisition Start: {current_time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+        fs.write(f"Total Duration Set: {TOTAL_TIME_S} seconds\n")
+        fs.write(f"Loop Sampling Interval: {INTERVAL_S} seconds\n")
+        fs.write(f"Auto-Calculated Time/Div: {applied_tdiv} s/div\n")
+        fs.write("\n--- SCPI COMMANDS SENT ---\n")
+        for setting in settings:
+            fs.write(f"- {setting}\n")
 
-    # --- 4. PREPARAZIONE FILE CSV DATI ---
-    f_csv = open(file_dati, mode='w', newline='')
+    # --- 4. PREPARE DATA CSV FILE ---
+    f_csv = open(file_data, mode='w', newline='')
     writer = csv.writer(f_csv)
     header = ['Timestamp', 'Time_s', 'Mean_CH1_V', 'StdDev_CH1_V', 'Mean_CH2_V', 'StdDev_CH2_V']
     writer.writerow(header)
 
-    # --- 5. SETUP PLOT IN TEMPO REALE ---
+    # --- 5. REAL-TIME PLOT SETUP ---
     plt.ion()  
     fig_rt, (ax1_rt, ax2_rt) = plt.subplots(2, 1, sharex=True, figsize=(10, 8))
 
     line1, = ax1_rt.plot([], [], 'b-', label="CH1 Mean (V)")
     line2, = ax2_rt.plot([], [], 'r-', label="CH2 Mean (V)")
 
-    ax1_rt.set_ylabel('Tensione CH1 (V)')
-    ax2_rt.set_ylabel('Tensione CH2 (V)')
-    ax2_rt.set_xlabel('Tempo (s)')
-    ax1_rt.set_title(f'Monitoraggio Deriva Lenta - Acq: {nome_base}')
+    ax1_rt.set_ylabel('CH1 Voltage (V)')
+    ax2_rt.set_ylabel('CH2 Voltage (V)')
+    ax2_rt.set_xlabel('Time (s)')
+    ax1_rt.set_title(f'Slow Drift Monitoring - Acq: {base_name}')
     ax1_rt.legend()
     ax2_rt.legend()
 
     times, v1_list, v2_list = [], [], []
     start_time = time.time()
 
-    print(f"\n[!] Inizio acquisizione. Dati salvati in: {cartella_acquisizione}")
+    print(f"\n[!] Acquisition started. Data saving to: {acq_folder}")
 
     try:
         while True:
-            current_time = time.time()
-            elapsed = current_time - start_time
+            loop_start = time.time()
+            elapsed = loop_start - start_time
 
             if elapsed > TOTAL_TIME_S:
+                # Print a final 100% progress bar before breaking
+                bar = '█' * 30
+                print(f"\r[{datetime.now(tz_rome).strftime('%H:%M:%S')}] Progress: |{bar}| 100.0% - Completed!    ")
                 break
 
-            raw_ch1_mean = inst.query("C1:PAVA? MEAN")
-            raw_ch1_std  = inst.query("C1:PAVA? STDEV")
-            raw_ch2_mean = inst.query("C2:PAVA? MEAN")
-            raw_ch2_std  = inst.query("C2:PAVA? STDEV")
+            # Query the oscilloscope
+            raw_ch1_mean = inst.query("C1:PAVA? MEAN").strip()
+            raw_ch1_std  = inst.query("C1:PAVA? STDEV").strip()
+            raw_ch2_mean = inst.query("C2:PAVA? MEAN").strip()
+            raw_ch2_std  = inst.query("C2:PAVA? STDEV").strip()
 
             try:
-                v1_mean = float(raw_ch1_mean.split(',')[1].replace('V', '').strip())
-                v1_std  = float(raw_ch1_std.split(',')[1].replace('V', '').strip())
-                v2_mean = float(raw_ch2_mean.split(',')[1].replace('V', '').strip())
-                v2_std  = float(raw_ch2_std.split(',')[1].replace('V', '').strip())
+                # Handle potential formatting anomalies from the scope
+                v1_mean = float(raw_ch1_mean.split(',')[1].replace('V', '')) if ',' in raw_ch1_mean else float(raw_ch1_mean.replace('V', ''))
+                v1_std  = float(raw_ch1_std.split(',')[1].replace('V', '')) if ',' in raw_ch1_std else float(raw_ch1_std.replace('V', ''))
+                v2_mean = float(raw_ch2_mean.split(',')[1].replace('V', '')) if ',' in raw_ch2_mean else float(raw_ch2_mean.replace('V', ''))
+                v2_std  = float(raw_ch2_std.split(',')[1].replace('V', '')) if ',' in raw_ch2_std else float(raw_ch2_std.replace('V', ''))
 
-                ts_now = datetime.now(tz_roma).strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+                ts_now = datetime.now(tz_rome).strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+                short_ts = ts_now.split(' ')[1][:-4] # Just HH:MM:SS for the progress bar
 
                 writer.writerow([ts_now, round(elapsed, 3), v1_mean, v1_std, v2_mean, v2_std])
                 f_csv.flush()
@@ -140,32 +173,38 @@ def main():
                 ax2_rt.autoscale_view()
                 plt.pause(0.01)  
 
-                tempo_rimasto = TOTAL_TIME_S - elapsed
-                print(f"[{ts_now}] CH1: {v1_mean:.3f}V | CH2: {v2_mean:.3f}V | Rimasti: {tempo_rimasto:.0f}s")
+                # Calculate progress and generate the loading bar
+                progress = min(elapsed / TOTAL_TIME_S, 1.0)
+                bar_length = 30
+                filled_len = int(bar_length * progress)
+                bar = '█' * filled_len + '-' * (bar_length - filled_len)
+                
+                # \r overwrites the current line in the terminal
+                print(f"\r[{short_ts}] CH1:{v1_mean:>7.3f}V | CH2:{v2_mean:>7.3f}V | Progress: |{bar}| {progress*100:>5.1f}%", end='\r')
 
             except Exception as parse_err:
-                print(f"Errore parsing: {parse_err}")
+                print(f"\nParsing error: {parse_err}. Raw data: {raw_ch1_mean}")
 
-            time_to_wait = INTERVAL_S - (time.time() - current_time)
+            time_to_wait = INTERVAL_S - (time.time() - loop_start)
             if time_to_wait > 0:
                 time.sleep(time_to_wait)
 
     except KeyboardInterrupt:
-        print("\nAcquisizione interrotta dall'utente.")
+        print("\n\nAcquisition interrupted by user.")
 
     finally:
-        print("\nChiusura connessioni e salvataggio in corso...")
+        print("\nClosing connections and saving...")
         f_csv.close()
         inst.close()
 
         plt.ioff()
         plt.close(fig_rt)
 
-        # --- GENERAZIONE GRAFICO E CALCOLO VISIBILITÀ (ENVELOPE DETECTION) ---
-        print("Calcolo Envelope Detection (Visibilità nel tempo)...")
+        # --- FINAL PLOT & VISIBILITY CALCULATION (ENVELOPE DETECTION) ---
+        print("Calculating Envelope Detection (Visibility over time)...")
         full_times, full_v1, full_v2 = [], [], []
 
-        with open(file_dati, mode='r') as f:
+        with open(file_data, mode='r') as f:
             reader = csv.DictReader(f)
             for row in reader:
                 full_times.append(float(row['Time_s']))
@@ -191,33 +230,33 @@ def main():
                 vis_times.append(t_chunk[int(WINDOW_SIZE/2)])
 
             with open(file_setup, 'a', encoding='utf-8') as fs:
-                fs.write("\n--- ANALISI VISIBILITÀ (ENVELOPE DETECTION) ---\n")
-                fs.write(f"Visibilità iniziale CH1: {vis_ch1_list[0]:.4f}\n")
-                fs.write(f"Visibilità finale CH1: {vis_ch1_list[-1]:.4f}\n")
-                fs.write(f"Visibilità iniziale CH2: {vis_ch2_list[0]:.4f}\n")
-                fs.write(f"Visibilità finale CH2: {vis_ch2_list[-1]:.4f}\n")
+                fs.write("\n--- VISIBILITY ANALYSIS (ENVELOPE DETECTION) ---\n")
+                fs.write(f"Initial Visibility CH1: {vis_ch1_list[0]:.4f}\n")
+                fs.write(f"Final Visibility CH1: {vis_ch1_list[-1]:.4f}\n")
+                fs.write(f"Initial Visibility CH2: {vis_ch2_list[0]:.4f}\n")
+                fs.write(f"Final Visibility CH2: {vis_ch2_list[-1]:.4f}\n")
 
-            print(f"\n📊 Visibilità CH1 passata da {vis_ch1_list[0]:.3f} a {vis_ch1_list[-1]:.3f}")
+            print(f"\n📊 CH1 Visibility went from {vis_ch1_list[0]:.3f} to {vis_ch1_list[-1]:.3f}")
 
-        # --- PLOT FINALE A 3 PANNELLI ---
+        # --- 3-PANEL FINAL PLOT ---
         fig_final, (ax1_f, ax2_f, ax3_f) = plt.subplots(3, 1, sharex=True, figsize=(12, 10))
 
         ax1_f.plot(full_times, full_v1, 'b-', label="CH1 Mean (V)", linewidth=1.5)
         ax2_f.plot(full_times, full_v2, 'r-', label="CH2 Mean (V)", linewidth=1.5)
 
         if vis_times:
-            ax3_f.plot(vis_times, vis_ch1_list, 'k.-', label="Visibilità CH1", linewidth=1.5)
-            ax3_f.plot(vis_times, vis_ch2_list, 'g.-', label="Visibilità CH2", linewidth=1.5)
-            ax3_f.set_ylabel('Contrasto (0 - 1)')
+            ax3_f.plot(vis_times, vis_ch1_list, 'k.-', label="CH1 Visibility", linewidth=1.5)
+            ax3_f.plot(vis_times, vis_ch2_list, 'g.-', label="CH2 Visibility", linewidth=1.5)
+            ax3_f.set_ylabel('Contrast (0 - 1)')
             ax3_f.set_ylim(0, 1)
             ax3_f.legend()
             ax3_f.grid(True, linestyle='--', alpha=0.6)
 
-        ax1_f.set_ylabel('Tensione CH1 (V)')
-        ax2_f.set_ylabel('Tensione CH2 (V)')
-        ax3_f.set_xlabel('Tempo (s)')
+        ax1_f.set_ylabel('CH1 Voltage (V)')
+        ax2_f.set_ylabel('CH2 Voltage (V)')
+        ax3_f.set_xlabel('Time (s)')
 
-        ax1_f.set_title(f'Deriva Fasi Mach-Zehnder - Acquisizione: {nome_base}')
+        ax1_f.set_title(f'Mach-Zehnder Phase Drift - Acq: {base_name}')
         ax1_f.legend()
         ax2_f.legend()
 
@@ -225,8 +264,8 @@ def main():
         ax2_f.grid(True, linestyle='--', alpha=0.6)
 
         plt.tight_layout()
-        plt.savefig(file_grafico, dpi=300, bbox_inches='tight')
-        print(f"✅ Grafico finale con Visibilità salvato in: {file_grafico}")
+        plt.savefig(file_plot, dpi=300, bbox_inches='tight')
+        print(f"✅ Final plot with visibility saved to: {file_plot}")
 
         plt.show()
 
