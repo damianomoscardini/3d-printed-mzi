@@ -14,7 +14,10 @@ RUN pip install --no-cache-dir \
     pyvisa \
     pyvisa-py \
     matplotlib \
-    tzdata
+    numpy \
+    tzdata \
+    scipy \ 
+    ipython
 
 WORKDIR /workspace
 
