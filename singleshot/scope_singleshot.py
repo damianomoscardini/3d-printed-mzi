@@ -5,6 +5,7 @@ import struct
 import math
 import json
 from datetime import datetime
+from zoneinfo import ZoneInfo
 import pyvisa
 
 def parse_preamble(pre_raw):
@@ -49,16 +50,21 @@ def acquire(acquisition_config):
     TRIG_CH         = acquisition_config['TRIG_CH']
 
     # ==========================================
-    # FOLDER CREATION
+    # FOLDER CREATION & TIMEZONE
     # ==========================================
     SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
-    now = datetime.now()
+    # Impostazione rigorosa del fuso orario di Roma
+    tz_rome = ZoneInfo("Europe/Rome")
+    now = datetime.now(tz_rome)
+
     date_str = now.strftime("%Y%m%d")         
     time_str = now.strftime("%H%M")           
-    date_time_str = f"{date_str}_{time_str}"  
+    # Aggiungiamo "_singleshot" come standard
+    date_time_str = f"{date_str}_{time_str}_singleshot"  
 
-    base_path = os.path.join(SCRIPT_DIR, "acquisitions", date_str, date_time_str)
+    # Nuova cartella root per le acquisizioni singleshot
+    base_path = os.path.join(SCRIPT_DIR, "acquisitions_singleshot", date_str, date_time_str)
     os.makedirs(base_path, exist_ok=True)
 
     rm = pyvisa.ResourceManager('@py') 
@@ -200,6 +206,7 @@ def acquire(acquisition_config):
         
         print() 
         
+        # Salvataggio con il nuovo naming standard
         bin_filename = os.path.join(base_path, f"{date_time_str}_data_{ch}.bin")
         with open(bin_filename, 'wb') as f:
             f.write(full_bin_data)
