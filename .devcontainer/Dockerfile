@@ -17,7 +17,8 @@ RUN pip install --no-cache-dir \
     numpy \
     tzdata \
     scipy \ 
-    ipython
+    ipython \
+    pyfirmata2
 
 WORKDIR /workspace
 

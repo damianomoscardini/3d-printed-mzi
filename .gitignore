@@ -1,7 +1,7 @@
 # Ignore acquisitions folder.
 
 acquisitions/
-
+acquisitions_singleshot/
 # Ignore all output files, wherever they are.
 
 *.csv
