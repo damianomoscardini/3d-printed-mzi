@@ -9,7 +9,7 @@ def main():
     # ==============================================================================
 
     # Lista delle potenze da testare (da 10% a 100%)
-    PWM_LIST = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
+    PWM_LIST = [0.3, 0.4]
 
     # Parametri di Sicurezza e Attesa
     MAX_JOULES = 200
