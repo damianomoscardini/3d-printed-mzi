@@ -2,9 +2,12 @@
 
 ![Interferometer setup](images/setup.jpg)
 
-Design, construction and optical alignment of a desktop-sized, 3D-printed Mach-Zehnder interferometer to demonstrate wave interference. Fringe intensity is acquired via OPT101 photodiodes and a Siglent SDS824XHD oscilloscope, with a thermally induced phase shift driven by a Kapton heater.
+A desktop-sized Mach-Zehnder interferometer — mirrors, beamsplitters, and every mount that holds them — 3D-printed to demonstrate wave interference. Fringe intensity is acquired via OPT101 photodiodes and a Siglent SDS824XHD oscilloscope, with a thermally induced phase shift driven by a Kapton heater.
 
 Still very much a work in progress.
+
+![Fringes](images/fringes.svg)
+![Fringes and visibility](images/fringes_and_visibility.svg)
 
 ## Repository layout
 
